@@ -1,0 +1,636 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.38.33.27573",
+      "templateHash": "10405199344917659085"
+    }
+  },
+  "parameters": {
+    "primaryRegion": {
+      "type": "string",
+      "defaultValue": "Central US",
+      "metadata": {
+        "description": "Primary region for deployment"
+      }
+    },
+    "secondaryRegion": {
+      "type": "string",
+      "defaultValue": "West US 2",
+      "metadata": {
+        "description": "Secondary region for deployment"
+      }
+    },
+    "environmentPrefix": {
+      "type": "string",
+      "defaultValue": "afd-lab",
+      "metadata": {
+        "description": "Environment prefix for resource naming"
+      }
+    },
+    "appServicePlanSku": {
+      "type": "string",
+      "defaultValue": "p1v3",
+      "metadata": {
+        "description": "App Service Plan SKU"
+      }
+    },
+    "applicationGatewaySku": {
+      "type": "string",
+      "defaultValue": "Standard_v2",
+      "metadata": {
+        "description": "Application Gateway SKU"
+      }
+    }
+  },
+  "variables": {
+    "uniqueSuffix": "[uniqueString(resourceGroup().id)]",
+    "primaryRegionCode": "cus",
+    "secondaryRegionCode": "wus2"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2023-01-01",
+      "name": "[format('{0}-asp-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix'))]",
+      "location": "[parameters('primaryRegion')]",
+      "sku": {
+        "name": "[parameters('appServicePlanSku')]"
+      },
+      "properties": {
+        "reserved": false
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2023-01-01",
+      "name": "[format('{0}-app-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix'))]",
+      "location": "[parameters('primaryRegion')]",
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', format('{0}-asp-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix')))]",
+        "httpsOnly": true,
+        "siteConfig": {
+          "minTlsVersion": "1.2",
+          "ftpsState": "Disabled",
+          "httpLoggingEnabled": true,
+          "detailedErrorLoggingEnabled": true
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/serverfarms', format('{0}-asp-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2023-09-01",
+      "name": "[format('{0}-vnet-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix'))]",
+      "location": "[parameters('primaryRegion')]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "10.1.0.0/16"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "appgw-subnet",
+            "properties": {
+              "addressPrefix": "10.1.1.0/24"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2023-09-01",
+      "name": "[format('{0}-pip-appgw-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix'))]",
+      "location": "[parameters('primaryRegion')]",
+      "sku": {
+        "name": "Standard"
+      },
+      "properties": {
+        "publicIPAllocationMethod": "Static",
+        "dnsSettings": {
+          "domainNameLabel": "[format('{0}-appgw-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix'))]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Network/applicationGateways",
+      "apiVersion": "2023-09-01",
+      "name": "[format('{0}-appgw-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix'))]",
+      "location": "[parameters('primaryRegion')]",
+      "properties": {
+        "sku": {
+          "name": "[parameters('applicationGatewaySku')]",
+          "tier": "Standard_v2",
+          "capacity": 2
+        },
+        "gatewayIPConfigurations": [
+          {
+            "name": "appGatewayIpConfig",
+            "properties": {
+              "subnet": {
+                "id": "[reference(resourceId('Microsoft.Network/virtualNetworks', format('{0}-vnet-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix'))), '2023-09-01').subnets[0].id]"
+              }
+            }
+          }
+        ],
+        "frontendIPConfigurations": [
+          {
+            "name": "appGwPublicFrontendIp",
+            "properties": {
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip-appgw-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix')))]"
+              }
+            }
+          }
+        ],
+        "frontendPorts": [
+          {
+            "name": "port_80",
+            "properties": {
+              "port": 80
+            }
+          },
+          {
+            "name": "port_443",
+            "properties": {
+              "port": 443
+            }
+          }
+        ],
+        "backendAddressPools": [
+          {
+            "name": "appServicePool",
+            "properties": {
+              "backendAddresses": [
+                {
+                  "fqdn": "[reference(resourceId('Microsoft.Web/sites', format('{0}-app-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix'))), '2023-01-01').defaultHostName]"
+                }
+              ]
+            }
+          }
+        ],
+        "backendHttpSettingsCollection": [
+          {
+            "name": "appServiceHttpSettings",
+            "properties": {
+              "port": 443,
+              "protocol": "Https",
+              "cookieBasedAffinity": "Disabled",
+              "pickHostNameFromBackendAddress": true,
+              "requestTimeout": 30
+            }
+          }
+        ],
+        "httpListeners": [
+          {
+            "name": "appGatewayHttpListener",
+            "properties": {
+              "frontendIPConfiguration": {
+                "id": "[resourceId('Microsoft.Network/applicationGateways/frontendIPConfigurations', format('{0}-appgw-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix')), 'appGwPublicFrontendIp')]"
+              },
+              "frontendPort": {
+                "id": "[resourceId('Microsoft.Network/applicationGateways/frontendPorts', format('{0}-appgw-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix')), 'port_80')]"
+              },
+              "protocol": "Http"
+            }
+          }
+        ],
+        "requestRoutingRules": [
+          {
+            "name": "appServiceRoutingRule",
+            "properties": {
+              "ruleType": "Basic",
+              "priority": 100,
+              "httpListener": {
+                "id": "[resourceId('Microsoft.Network/applicationGateways/httpListeners', format('{0}-appgw-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix')), 'appGatewayHttpListener')]"
+              },
+              "backendAddressPool": {
+                "id": "[resourceId('Microsoft.Network/applicationGateways/backendAddressPools', format('{0}-appgw-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix')), 'appServicePool')]"
+              },
+              "backendHttpSettings": {
+                "id": "[resourceId('Microsoft.Network/applicationGateways/backendHttpSettingsCollection', format('{0}-appgw-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix')), 'appServiceHttpSettings')]"
+              }
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', format('{0}-app-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix')))]",
+        "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip-appgw-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix')))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', format('{0}-vnet-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2023-01-01",
+      "name": "[format('{0}-asp-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix'))]",
+      "location": "[parameters('secondaryRegion')]",
+      "sku": {
+        "name": "[parameters('appServicePlanSku')]"
+      },
+      "properties": {
+        "reserved": false
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2023-01-01",
+      "name": "[format('{0}-app-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix'))]",
+      "location": "[parameters('secondaryRegion')]",
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', format('{0}-asp-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix')))]",
+        "httpsOnly": true,
+        "siteConfig": {
+          "minTlsVersion": "1.2",
+          "ftpsState": "Disabled",
+          "httpLoggingEnabled": true,
+          "detailedErrorLoggingEnabled": true
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/serverfarms', format('{0}-asp-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2023-09-01",
+      "name": "[format('{0}-vnet-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix'))]",
+      "location": "[parameters('secondaryRegion')]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "10.2.0.0/16"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "appgw-subnet",
+            "properties": {
+              "addressPrefix": "10.2.1.0/24"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2023-09-01",
+      "name": "[format('{0}-pip-appgw-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix'))]",
+      "location": "[parameters('secondaryRegion')]",
+      "sku": {
+        "name": "Standard"
+      },
+      "properties": {
+        "publicIPAllocationMethod": "Static",
+        "dnsSettings": {
+          "domainNameLabel": "[format('{0}-appgw-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix'))]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Network/applicationGateways",
+      "apiVersion": "2023-09-01",
+      "name": "[format('{0}-appgw-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix'))]",
+      "location": "[parameters('secondaryRegion')]",
+      "properties": {
+        "sku": {
+          "name": "[parameters('applicationGatewaySku')]",
+          "tier": "Standard_v2",
+          "capacity": 2
+        },
+        "gatewayIPConfigurations": [
+          {
+            "name": "appGatewayIpConfig",
+            "properties": {
+              "subnet": {
+                "id": "[reference(resourceId('Microsoft.Network/virtualNetworks', format('{0}-vnet-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix'))), '2023-09-01').subnets[0].id]"
+              }
+            }
+          }
+        ],
+        "frontendIPConfigurations": [
+          {
+            "name": "appGwPublicFrontendIp",
+            "properties": {
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip-appgw-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix')))]"
+              }
+            }
+          }
+        ],
+        "frontendPorts": [
+          {
+            "name": "port_80",
+            "properties": {
+              "port": 80
+            }
+          },
+          {
+            "name": "port_443",
+            "properties": {
+              "port": 443
+            }
+          }
+        ],
+        "backendAddressPools": [
+          {
+            "name": "appServicePool",
+            "properties": {
+              "backendAddresses": [
+                {
+                  "fqdn": "[reference(resourceId('Microsoft.Web/sites', format('{0}-app-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix'))), '2023-01-01').defaultHostName]"
+                }
+              ]
+            }
+          }
+        ],
+        "backendHttpSettingsCollection": [
+          {
+            "name": "appServiceHttpSettings",
+            "properties": {
+              "port": 443,
+              "protocol": "Https",
+              "cookieBasedAffinity": "Disabled",
+              "pickHostNameFromBackendAddress": true,
+              "requestTimeout": 30
+            }
+          }
+        ],
+        "httpListeners": [
+          {
+            "name": "appGatewayHttpListener",
+            "properties": {
+              "frontendIPConfiguration": {
+                "id": "[resourceId('Microsoft.Network/applicationGateways/frontendIPConfigurations', format('{0}-appgw-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix')), 'appGwPublicFrontendIp')]"
+              },
+              "frontendPort": {
+                "id": "[resourceId('Microsoft.Network/applicationGateways/frontendPorts', format('{0}-appgw-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix')), 'port_80')]"
+              },
+              "protocol": "Http"
+            }
+          }
+        ],
+        "requestRoutingRules": [
+          {
+            "name": "appServiceRoutingRule",
+            "properties": {
+              "ruleType": "Basic",
+              "priority": 100,
+              "httpListener": {
+                "id": "[resourceId('Microsoft.Network/applicationGateways/httpListeners', format('{0}-appgw-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix')), 'appGatewayHttpListener')]"
+              },
+              "backendAddressPool": {
+                "id": "[resourceId('Microsoft.Network/applicationGateways/backendAddressPools', format('{0}-appgw-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix')), 'appServicePool')]"
+              },
+              "backendHttpSettings": {
+                "id": "[resourceId('Microsoft.Network/applicationGateways/backendHttpSettingsCollection', format('{0}-appgw-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix')), 'appServiceHttpSettings')]"
+              }
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', format('{0}-app-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix')))]",
+        "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip-appgw-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix')))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', format('{0}-vnet-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/trafficmanagerprofiles",
+      "apiVersion": "2022-04-01",
+      "name": "[format('{0}-tm-regional-{1}', parameters('environmentPrefix'), variables('uniqueSuffix'))]",
+      "location": "global",
+      "properties": {
+        "profileStatus": "Enabled",
+        "trafficRoutingMethod": "Priority",
+        "dnsConfig": {
+          "relativeName": "[format('{0}-tm-regional-{1}', parameters('environmentPrefix'), variables('uniqueSuffix'))]",
+          "ttl": 30
+        },
+        "monitorConfig": {
+          "protocol": "HTTP",
+          "port": 80,
+          "path": "/",
+          "intervalInSeconds": 30,
+          "timeoutInSeconds": 10,
+          "toleratedNumberOfFailures": 3
+        },
+        "endpoints": [
+          {
+            "name": "primary-appgw-endpoint",
+            "type": "Microsoft.Network/trafficManagerProfiles/ExternalEndpoints",
+            "properties": {
+              "target": "[reference(resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip-appgw-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix'))), '2023-09-01').dnsSettings.fqdn]",
+              "endpointStatus": "Enabled",
+              "priority": 1
+            }
+          },
+          {
+            "name": "secondary-appgw-endpoint",
+            "type": "Microsoft.Network/trafficManagerProfiles/ExternalEndpoints",
+            "properties": {
+              "target": "[reference(resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip-appgw-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix'))), '2023-09-01').dnsSettings.fqdn]",
+              "endpointStatus": "Enabled",
+              "priority": 2
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip-appgw-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix')))]",
+        "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip-appgw-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Cdn/profiles",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}-afd-{1}', parameters('environmentPrefix'), variables('uniqueSuffix'))]",
+      "location": "global",
+      "sku": {
+        "name": "Standard_AzureFrontDoor"
+      },
+      "properties": {}
+    },
+    {
+      "type": "Microsoft.Cdn/profiles/afdEndpoints",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}', format('{0}-afd-{1}', parameters('environmentPrefix'), variables('uniqueSuffix')), format('{0}-afd-endpoint-{1}', parameters('environmentPrefix'), variables('uniqueSuffix')))]",
+      "location": "global",
+      "properties": {
+        "enabledState": "Enabled"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Cdn/profiles', format('{0}-afd-{1}', parameters('environmentPrefix'), variables('uniqueSuffix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Cdn/profiles/originGroups",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}', format('{0}-afd-{1}', parameters('environmentPrefix'), variables('uniqueSuffix')), 'appgw-origin-group')]",
+      "properties": {
+        "loadBalancingSettings": {
+          "sampleSize": 4,
+          "successfulSamplesRequired": 3,
+          "additionalLatencyInMilliseconds": 50
+        },
+        "healthProbeSettings": {
+          "probePath": "/",
+          "probeRequestType": "HEAD",
+          "probeProtocol": "Http",
+          "probeIntervalInSeconds": 100
+        },
+        "sessionAffinityState": "Disabled"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Cdn/profiles', format('{0}-afd-{1}', parameters('environmentPrefix'), variables('uniqueSuffix')))]",
+        "[resourceId('Microsoft.Network/applicationGateways', format('{0}-appgw-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix')))]",
+        "[resourceId('Microsoft.Network/applicationGateways', format('{0}-appgw-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Cdn/profiles/originGroups/origins",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}/{2}', format('{0}-afd-{1}', parameters('environmentPrefix'), variables('uniqueSuffix')), 'appgw-origin-group', 'primary-appgw-origin')]",
+      "properties": {
+        "hostName": "[reference(resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip-appgw-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix'))), '2023-09-01').dnsSettings.fqdn]",
+        "httpPort": 80,
+        "httpsPort": 443,
+        "originHostHeader": "[reference(resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip-appgw-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix'))), '2023-09-01').dnsSettings.fqdn]",
+        "priority": 1,
+        "weight": 1000,
+        "enabledState": "Enabled"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Cdn/profiles/originGroups', format('{0}-afd-{1}', parameters('environmentPrefix'), variables('uniqueSuffix')), 'appgw-origin-group')]",
+        "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip-appgw-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Cdn/profiles/originGroups/origins",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}/{2}', format('{0}-afd-{1}', parameters('environmentPrefix'), variables('uniqueSuffix')), 'appgw-origin-group', 'secondary-appgw-origin')]",
+      "properties": {
+        "hostName": "[reference(resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip-appgw-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix'))), '2023-09-01').dnsSettings.fqdn]",
+        "httpPort": 80,
+        "httpsPort": 443,
+        "originHostHeader": "[reference(resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip-appgw-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix'))), '2023-09-01').dnsSettings.fqdn]",
+        "priority": 2,
+        "weight": 1000,
+        "enabledState": "Enabled"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Cdn/profiles/originGroups', format('{0}-afd-{1}', parameters('environmentPrefix'), variables('uniqueSuffix')), 'appgw-origin-group')]",
+        "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip-appgw-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Cdn/profiles/afdEndpoints/routes",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}/{2}', format('{0}-afd-{1}', parameters('environmentPrefix'), variables('uniqueSuffix')), format('{0}-afd-endpoint-{1}', parameters('environmentPrefix'), variables('uniqueSuffix')), 'default-route')]",
+      "properties": {
+        "originGroup": {
+          "id": "[resourceId('Microsoft.Cdn/profiles/originGroups', format('{0}-afd-{1}', parameters('environmentPrefix'), variables('uniqueSuffix')), 'appgw-origin-group')]"
+        },
+        "supportedProtocols": [
+          "Http",
+          "Https"
+        ],
+        "patternsToMatch": [
+          "/*"
+        ],
+        "linkToDefaultDomain": "Enabled",
+        "httpsRedirect": "Enabled",
+        "enabledState": "Enabled"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Cdn/profiles/afdEndpoints', format('{0}-afd-{1}', parameters('environmentPrefix'), variables('uniqueSuffix')), format('{0}-afd-endpoint-{1}', parameters('environmentPrefix'), variables('uniqueSuffix')))]",
+        "[resourceId('Microsoft.Cdn/profiles/originGroups', format('{0}-afd-{1}', parameters('environmentPrefix'), variables('uniqueSuffix')), 'appgw-origin-group')]",
+        "[resourceId('Microsoft.Cdn/profiles/originGroups/origins', format('{0}-afd-{1}', parameters('environmentPrefix'), variables('uniqueSuffix')), 'appgw-origin-group', 'primary-appgw-origin')]",
+        "[resourceId('Microsoft.Cdn/profiles/originGroups/origins', format('{0}-afd-{1}', parameters('environmentPrefix'), variables('uniqueSuffix')), 'appgw-origin-group', 'secondary-appgw-origin')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/trafficmanagerprofiles",
+      "apiVersion": "2022-04-01",
+      "name": "[format('{0}-tm-parent-{1}', parameters('environmentPrefix'), variables('uniqueSuffix'))]",
+      "location": "global",
+      "properties": {
+        "profileStatus": "Enabled",
+        "trafficRoutingMethod": "Priority",
+        "dnsConfig": {
+          "relativeName": "[format('{0}-tm-parent-{1}', parameters('environmentPrefix'), variables('uniqueSuffix'))]",
+          "ttl": 30
+        },
+        "monitorConfig": {
+          "protocol": "HTTP",
+          "port": 80,
+          "path": "/",
+          "intervalInSeconds": 30,
+          "timeoutInSeconds": 10,
+          "toleratedNumberOfFailures": 3
+        },
+        "endpoints": [
+          {
+            "name": "frontdoor-endpoint",
+            "type": "Microsoft.Network/trafficManagerProfiles/ExternalEndpoints",
+            "properties": {
+              "target": "[reference(resourceId('Microsoft.Cdn/profiles/afdEndpoints', format('{0}-afd-{1}', parameters('environmentPrefix'), variables('uniqueSuffix')), format('{0}-afd-endpoint-{1}', parameters('environmentPrefix'), variables('uniqueSuffix'))), '2023-05-01').hostName]",
+              "endpointStatus": "Enabled",
+              "priority": 1
+            }
+          },
+          {
+            "name": "regional-tm-endpoint",
+            "type": "Microsoft.Network/trafficManagerProfiles/NestedEndpoints",
+            "properties": {
+              "targetResourceId": "[resourceId('Microsoft.Network/trafficmanagerprofiles', format('{0}-tm-regional-{1}', parameters('environmentPrefix'), variables('uniqueSuffix')))]",
+              "endpointStatus": "Enabled",
+              "priority": 2,
+              "minChildEndpoints": 1
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Cdn/profiles/afdEndpoints', format('{0}-afd-{1}', parameters('environmentPrefix'), variables('uniqueSuffix')), format('{0}-afd-endpoint-{1}', parameters('environmentPrefix'), variables('uniqueSuffix')))]",
+        "[resourceId('Microsoft.Network/trafficmanagerprofiles', format('{0}-tm-regional-{1}', parameters('environmentPrefix'), variables('uniqueSuffix')))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "primaryAppServiceUrl": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/sites', format('{0}-app-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix'))), '2023-01-01').defaultHostName)]"
+    },
+    "secondaryAppServiceUrl": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/sites', format('{0}-app-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix'))), '2023-01-01').defaultHostName)]"
+    },
+    "primaryAppGatewayFqdn": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip-appgw-{1}-{2}', parameters('environmentPrefix'), variables('primaryRegionCode'), variables('uniqueSuffix'))), '2023-09-01').dnsSettings.fqdn]"
+    },
+    "secondaryAppGatewayFqdn": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', format('{0}-pip-appgw-{1}-{2}', parameters('environmentPrefix'), variables('secondaryRegionCode'), variables('uniqueSuffix'))), '2023-09-01').dnsSettings.fqdn]"
+    },
+    "regionalTrafficManagerFqdn": {
+      "type": "string",
+      "value": "[format('{0}.trafficmanager.net', reference(resourceId('Microsoft.Network/trafficmanagerprofiles', format('{0}-tm-regional-{1}', parameters('environmentPrefix'), variables('uniqueSuffix'))), '2022-04-01').dnsConfig.relativeName)]"
+    },
+    "frontDoorEndpointUrl": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.Cdn/profiles/afdEndpoints', format('{0}-afd-{1}', parameters('environmentPrefix'), variables('uniqueSuffix')), format('{0}-afd-endpoint-{1}', parameters('environmentPrefix'), variables('uniqueSuffix'))), '2023-05-01').hostName)]"
+    },
+    "parentTrafficManagerFqdn": {
+      "type": "string",
+      "value": "[format('{0}.trafficmanager.net', reference(resourceId('Microsoft.Network/trafficmanagerprofiles', format('{0}-tm-parent-{1}', parameters('environmentPrefix'), variables('uniqueSuffix'))), '2022-04-01').dnsConfig.relativeName)]"
+    }
+  }
+}
